@@ -3,6 +3,7 @@
   'use strict';
 
   var KEY = 'pd.v1';
+  var VERSION = 6;
   var SCAN_URL = 'https://scanner.tradingview.com/global/scan';
   var FX_SYM = 'FX_IDC:USDTRY';
   var OZ_SYM = 'OANDA:XAUUSD';
@@ -34,6 +35,7 @@
   var view = 'home';
   var result = null;     // son hesap sonucu (ekranda tutulur)
   var applied = false;   // alımlar adetlere eklendi mi
+  var appliedTs = null;  // uygulanan alımın Geçmiş kaydı (geri alma için)
   var amountText = null; // tutar alanına yazılan ama henüz hesaplanmamış metin
   var fetchStatus = null;
   var fetching = false;
@@ -322,22 +324,32 @@
     if (r.leftoverTL >= 1) {
       h += '<div class="small muted" style="margin-top:8px">Adetler aşağı yuvarlandığı için artan: ' + tl(r.leftoverTL) + '</div>';
     }
-    h += '<button data-action="apply"' + (applied ? ' disabled' : '') + '>' +
-      (applied ? 'Adetlere eklendi, bu ay kaydedildi' : 'Alımları yaptım, adetlere ekle') + '</button>';
-    if (!applied) h += '<div class="tiny muted" style="margin-top:6px">Adetlerini günceller ve bu ayı Geçmiş\'e otomatik kaydeder.</div>';
+    if (applied) {
+      h += '<div class="note" style="margin:12px 0 0">Adetlere eklendi, bu ay Geçmiş\'e kaydedildi.</div>';
+      if (appliedTs) h += '<button class="secondary" data-action="undo">Geri al</button>';
+    } else {
+      h += '<button data-action="apply">Alımları yaptım, adetlere ekle</button>';
+      h += '<div class="tiny muted" style="margin-top:6px">Adetlerini günceller ve bu ayı Geçmiş\'e otomatik kaydeder. Gerekirse sonra geri alabilirsin.</div>';
+    }
     h += '</div>';
     return h;
   }
 
   function historyHTML() {
     var h = '<h1>Geçmiş</h1>';
-    if (!state.history.length) return h + '<p class="muted">Henüz kayıt yok. "Alımları yaptım, adetlere ekle"ye bastığında o ay buraya otomatik kaydedilir.</p>';
+    var foot = '<p class="tiny muted" style="text-align:center;margin-top:20px">Sürüm ' + VERSION + '</p>';
+    if (!state.history.length) return h + '<p class="muted">Henüz kayıt yok. "Alımları yaptım, adetlere ekle"ye bastığında o ay buraya otomatik kaydedilir.</p>' + foot;
     state.history.slice().reverse().forEach(function (rec) {
       h += '<section class="card">';
       h += '<div class="row"><b>' + date(rec.ts) + '</b><button class="ghost" data-action="delRec" data-ts="' + rec.ts + '">Sil</button></div>';
       h += '<div class="num">' + tl(rec.totalTL) + ' <span class="muted">· ' + usd(rec.totalUSD) + '</span></div>';
       h += '<div class="small muted num">Eklenen: ' + (rec.amount ? tl(rec.amount) : '—') + ' · Kur: ' + fmt(rec.fx, 4) +
         (rec.gram ? ' · Gram altın: ' + tl2(rec.gram) : '') + '</div>';
+      if (rec.added && rec.added.length) {
+        h += '<div class="small num" style="margin-top:4px">Alınan: ' + rec.added.map(function (x) {
+          return esc(x.name) + ' +' + units(x.units, x.currency);
+        }).join(' · ') + '</div>';
+      }
       h += '<details style="margin-top:6px"><summary class="small">Ayrıntı</summary>';
       (rec.assets || []).forEach(function (a) {
         h += '<div class="row small num"><span>' + esc(a.name) + '</span><span>' + units(a.qty, a.currency) + ' × ' +
@@ -345,7 +357,7 @@
       });
       h += '</details></section>';
     });
-    return h;
+    return h + '<p class="small muted">Bir kaydı silersen o kayıtla eklenen adetler de geri alınır.</p>' + foot;
   }
 
   // Değişiklikten sonra yeniden çiz; kullanıcının dokunduğu yeni alanın odağını koru
@@ -368,6 +380,7 @@
     var input = document.getElementById('amount');
     var amount = parseNum(input.value);
     applied = false;
+    appliedTs = null;
     if (amount == null || !isFinite(amount) || amount <= 0) {
       result = { errors: ['Eklenecek tutarı 0\'dan büyük bir sayı olarak girin (ör. 35.000).'] };
       render();
@@ -394,25 +407,30 @@
       .map(function (x) { return x.name + ' +' + units(x.units, x.currency); });
     if (!list.length) { toast('Eklenecek adet yok.'); return; }
     if (!confirm('Şu adetler mevcut adetlerine eklenecek ve bu ay Geçmiş\'e kaydedilecek:\n\n' + list.join('\n') + '\n\nGerçekte farklı adet aldıysan sonra kartlardan düzeltebilirsin.')) return;
+    var added = [];
     result.rows.forEach(function (x) {
       var a = state.assets.filter(function (y) { return y.id === x.id; })[0];
-      if (a && x.units > 0) a.qty = Calc.floorTo((a.qty || 0) + x.units + 1e-9, 4);
+      if (a && x.units > 0) {
+        a.qty = Calc.floorTo((a.qty || 0) + x.units + 1e-9, 4);
+        added.push({ id: a.id, name: a.name, currency: a.currency, units: x.units });
+      }
     });
     applied = true;
-    saveMonth();
-    toast('Adetler güncellendi, bu ay kaydedildi');
+    appliedTs = saveMonth(added);
+    save();
+    render();
+    toast(appliedTs ? 'Adetler güncellendi, bu ay kaydedildi' : 'Adetler güncellendi ama ay kaydedilemedi (fiyatlar eksik).');
   }
 
-  function saveMonth() {
+  // Bu ayı Geçmiş'e yazar; kaydın zaman damgasını (ya da kaydedilemezse null) döner
+  function saveMonth(added) {
     var fx = fxVal();
     var v = Calc.valuate(calcInput(), fx);
-    if (v.totalTL == null || !fx) {
-      save();
-      render();
-      return;
-    }
+    if (v.totalTL == null || !fx) return null;
+    var ts = Date.now();
     state.history.push({
-      ts: Date.now(),
+      ts: ts,
+      added: added || [],
       fx: fx,
       gram: gramVal(),
       amount: state.amount || 0,
@@ -422,15 +440,30 @@
         return { name: a.name, currency: a.currency, qty: a.qty, price: priceOf(a) };
       })
     });
-    save();
-    render();
+    return ts;
   }
 
+  // Kaydı siler ve o kayıtla eklenen adetleri geri düşer
   function deleteRecord(ts) {
-    if (!confirm('Bu kayıt silinsin mi?')) return;
-    state.history = state.history.filter(function (r) { return String(r.ts) !== String(ts); });
+    var rec = state.history.filter(function (r) { return String(r.ts) === String(ts); })[0];
+    if (!rec) return;
+    var added = (rec.added || []).filter(function (x) { return x.units > 0; });
+    var msg = added.length
+      ? 'Bu kayıt silinecek ve o gün eklenen adetler geri alınacak:\n\n' +
+        added.map(function (x) { return x.name + ' −' + units(x.units, x.currency); }).join('\n')
+      : 'Bu kayıt silinsin mi? (Adetlerin değişmez.)';
+    if (!confirm(msg)) return;
+    added.forEach(function (x) {
+      state.assets.forEach(function (a) {
+        if (a.id === x.id) a.qty = Math.max(0, Calc.floorTo((a.qty || 0) - x.units + 1e-9, 4));
+      });
+    });
+    state.history = state.history.filter(function (r) { return r !== rec; });
+    // Geri alınan alım ekrandaki sonuçsa, sonucu tekrar uygulanabilir yap
+    if (String(appliedTs) === String(ts)) { applied = false; appliedTs = null; }
     save();
     render();
+    toast(added.length ? 'Kayıt silindi, adetler geri alındı' : 'Kayıt silindi');
   }
 
   // ---------- Olaylar ----------
@@ -450,6 +483,7 @@
     else if (act === 'calc') doCalc();
     else if (act === 'apply') applyBuys();
     else if (act === 'delRec') deleteRecord(b.getAttribute('data-ts'));
+    else if (act === 'undo') deleteRecord(appliedTs);
   });
 
   document.addEventListener('change', function (e) {
@@ -498,7 +532,7 @@
   }
 
   if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(function () {});
-  if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(function () {});
+  if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).catch(function () {});
 
   // Açılışta, uygulamaya geri dönünce ve açık kaldıkça dakikada bir fiyatları yenile
   autoRefresh();

@@ -1,6 +1,6 @@
 // Uygulama dosyalarını telefona kaydeder, internet olmadan da açılsın diye.
 // Portföy verilerine dokunmaz; onlar yalnızca telefonun hafızasında durur.
-var CACHE = 'dengeleyici-v5';
+var CACHE = 'dengeleyici-v6';
 var FILES = ['./', 'index.html', 'app.js', 'calc.js', 'manifest.json', 'apple-touch-icon.png', 'icon-192.png', 'icon-512.png'];
 
 self.addEventListener('install', function (e) {
@@ -17,12 +17,13 @@ self.addEventListener('activate', function (e) {
 });
 
 // Yalnızca uygulamanın kendi dosyaları: önce internet, olmazsa kayıtlı kopya.
+// İnternetten alırken tarayıcı önbelleğini atla: güncellemeler hemen gelsin.
 // Fiyat istekleri (başka site) hiç önbelleğe alınmaz.
 self.addEventListener('fetch', function (e) {
   var req = e.request;
   if (req.method !== 'GET' || new URL(req.url).origin !== self.location.origin) return;
   e.respondWith(
-    fetch(req).then(function (res) {
+    fetch(new Request(req.url, { cache: 'no-cache' })).then(function (res) {
       var copy = res.clone();
       caches.open(CACHE).then(function (c) { c.put(req, copy); });
       return res;
