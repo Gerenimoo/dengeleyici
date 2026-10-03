@@ -3,7 +3,7 @@
   'use strict';
 
   var KEY = 'pd.v1';
-  var VERSION = 7;
+  var VERSION = 8;
   var SCAN_URL = 'https://scanner.tradingview.com/global/scan';
   var FX_SYM = 'FX_IDC:USDTRY';
   var OZ_SYM = 'OANDA:XAUUSD';
@@ -194,8 +194,9 @@
         ? { text: 'Alınamayanlar: ' + missing.join(', ') + '. Bunlar için son alınan fiyat kullanılıyor; biraz sonra tekrar dene.', warn: true }
         : null;
       if (!missing.length && !quiet) toast('Fiyatlar güncellendi');
-      // Ekranda (henüz uygulanmamış) bir sonuç varsa yeni fiyatlarla yeniden hesapla
-      if (result && result.rows && !applied && state.amount) result = compute(state.amount);
+      // Ekrandaki sonuç sabit kalır (kullanıcı onunla Midas'ta alım yapıyor olabilir);
+      // fiyatlar değiştiyse yalnızca not düşülür
+      if (result && result.rows && !applied && result.priceKey !== priceKey()) result.stale = true;
     }).catch(function () {
       fetchStatus = {
         text: (navigator.onLine === false ? 'İnternet bağlantısı yok.' : 'Fiyat kaynağı yanıt vermedi.') +
@@ -263,8 +264,15 @@
     }
     h += '<div class="small muted" style="margin-top:8px">Fiyatların son güncellemesi: ' +
       (state.updatedAt ? dateTime(state.updatedAt) : 'henüz yok') + '</div>';
-    h += '<div class="small muted num">USD/TL: ' + (fx ? fmt(fx, 4) : '—') +
-      ' · Gram altın: ' + (gramVal() ? tl2(gramVal()) : '—') + '</div>';
+    h += '<div class="prices num">';
+    h += '<div class="row small"><span class="muted">USD/TL</span><span>' + (fx ? fmt(fx, 4) : '—') + '</span></div>';
+    h += '<div class="row small"><span class="muted">Gram altın</span><span>' + (gramVal() ? tl2(gramVal()) : '—') + '</span></div>';
+    state.assets.forEach(function (a) {
+      var p = priceOf(a);
+      h += '<div class="row small"><span class="muted">' + esc(a.name) + '</span><span>' +
+        (p ? (a.currency === 'USD' ? usd(p) : tl2(p)) : '—') + '</span></div>';
+    });
+    h += '</div>';
     if (fetchStatus) h += '<div class="note ' + (fetchStatus.warn ? 'warn' : '') + '" style="margin:10px 0 0">' + esc(fetchStatus.text) + '</div>';
     h += '<button data-action="refresh"' + (fetching ? ' disabled' : '') + '>' + (fetching ? 'Güncelleniyor…' : 'Güncelle') + '</button>';
     h += '</section>';
@@ -320,6 +328,10 @@
     }
     var r = result;
     var h = '<div style="margin-top:14px">';
+    if (r.stale && !applied) {
+      h += '<div class="note warn">Fiyatlar bu hesaptan sonra değişti. Aşağıdaki öneri hesapladığın andaki fiyatlarla. ' +
+        'Henüz alım yapmadıysan istersen yeniden "Hesapla"ya bas.</div>';
+    }
     if (r.goldSkipped) {
       h += '<div class="note bad">Altın primi ' + pct(r.goldSkipped) + '. Prim çok yüksek, bu ay altın alımını ertele. Altının payı diğer varlıklara dağıtıldı.</div>';
     }
@@ -445,7 +457,18 @@
     var skip = prem && prem.level === 'red' && g && state.assets.length > 1;
     var res = Calc.rebalanceMin(calcInput(), fxVal(), amount, skip ? [g.id] : [], MIN_BUY);
     if (!res.errors.length && skip) res.goldSkipped = prem.value;
+    res.priceKey = priceKey();
     return res;
+  }
+
+  // Hesapta kullanılan fiyatların özeti; değişip değişmediğini anlamak için
+  function priceKey() {
+    return JSON.stringify([fxVal(), gramVal(), state.assets.map(priceOf)]);
+  }
+
+  function sameDay(a, b) {
+    var x = new Date(a), y = new Date(b);
+    return x.getFullYear() === y.getFullYear() && x.getMonth() === y.getMonth() && x.getDate() === y.getDate();
   }
 
   function applyBuys() {
@@ -453,7 +476,14 @@
     var list = result.rows.filter(function (x) { return x.units > 0; })
       .map(function (x) { return x.name + ' +' + units(x.units, x.currency); });
     if (!list.length) { toast('Eklenecek adet yok.'); return; }
-    if (!confirm('Şu adetler mevcut adetlerine eklenecek ve bu ay Geçmiş\'e kaydedilecek:\n\n' + list.join('\n') + '\n\nGerçekte farklı adet aldıysan sonra kartlardan düzeltebilirsin.')) return;
+    // Aynı alımın iki kez eklenmesine karşı: bugün zaten kayıt varsa açıkça uyar
+    var today = state.history.filter(function (r) { return sameDay(r.ts, Date.now()); });
+    var warn = today.length
+      ? '⚠️ Bugün zaten bir alım kaydettin (saat ' + new Date(today[today.length - 1].ts).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' }) +
+        '). Aynı alımı tekrar eklemek üzere olabilirsin.\n\n'
+      : '';
+    if (!confirm(warn + 'Şu adetler mevcut adetlerine eklenecek ve bu ay Geçmiş\'e kaydedilecek:\n\n' + list.join('\n') +
+      '\n\n' + (today.length ? 'Yine de eklensin mi?' : 'Gerçekte farklı adet aldıysan sonra "Adetleri düzenle" ile düzeltebilirsin.'))) return;
     var added = [];
     result.rows.forEach(function (x) {
       var a = state.assets.filter(function (y) { return y.id === x.id; })[0];
