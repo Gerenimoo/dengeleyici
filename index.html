@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Portföy Dengeleyici</title>
+<meta name="description" content="Aylık eklenecek parayı hedef oranlara göre dağıtır.">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Dengeleyici">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="theme-color" content="#f5f6f4" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#121413" media="(prefers-color-scheme: dark)">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="manifest" href="manifest.json">
+<style>
+  :root {
+    --bg: #f5f6f4;
+    --card: #ffffff;
+    --text: #1c1f1d;
+    --muted: #6b716d;
+    --line: #e3e6e2;
+    --accent: #2f6f5e;
+    --accent-text: #ffffff;
+    --soft: #eaf2ef;
+    --warn: #b86a12;
+    --warn-bg: #fdf3e6;
+    --bad: #c0392b;
+    --bad-bg: #fbeceb;
+    --good: #2e7d4f;
+    --good-bg: #e8f4ec;
+    --yellow: #a07a00;
+    --yellow-bg: #fbf5df;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #121413;
+      --card: #1c1f1e;
+      --text: #e8ebe9;
+      --muted: #9aa19d;
+      --line: #2c302e;
+      --accent: #5fb39b;
+      --accent-text: #0e1211;
+      --soft: #1f2a27;
+      --warn: #f0a24a;
+      --warn-bg: #2e2416;
+      --bad: #ef7a6c;
+      --bad-bg: #2f1c1a;
+      --good: #6fcf97;
+      --good-bg: #17291f;
+      --yellow: #e6c34d;
+      --yellow-bg: #2b2716;
+      color-scheme: dark;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text); }
+  body {
+    font: 16px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    -webkit-text-size-adjust: 100%;
+    padding: env(safe-area-inset-top) 0 calc(76px + env(safe-area-inset-bottom));
+  }
+  main { max-width: 560px; margin: 0 auto; padding: 12px 16px 24px; }
+  h1 { font-size: 20px; margin: 8px 0 12px; }
+  h2 { font-size: 17px; margin: 0 0 10px; }
+  .card {
+    background: var(--card); border: 1px solid var(--line); border-radius: 16px;
+    padding: 14px 16px; margin-bottom: 12px;
+  }
+  .muted { color: var(--muted); }
+  .small { font-size: 14px; }
+  .tiny { font-size: 12.5px; }
+  .num { font-variant-numeric: tabular-nums; }
+  .big { font-size: 30px; font-weight: 650; letter-spacing: -0.5px; }
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 10px; }
+  .grid3 > div { min-width: 0; }
+  .lbl { font-size: 12.5px; color: var(--muted); display: block; }
+  .val { font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+  .badge {
+    display: inline-block; font-size: 11.5px; font-weight: 600; padding: 1px 7px;
+    border-radius: 99px; background: var(--warn-bg); color: var(--warn); vertical-align: 1px;
+  }
+  .pill { display: inline-block; padding: 2px 9px; border-radius: 99px; font-weight: 600; font-size: 14px; }
+  .pill.green { background: var(--good-bg); color: var(--good); }
+  .pill.yellow { background: var(--yellow-bg); color: var(--yellow); }
+  .pill.red { background: var(--bad-bg); color: var(--bad); }
+  .asset.warn { border-color: var(--warn); box-shadow: inset 4px 0 0 var(--warn); }
+  .dev { font-size: 13.5px; color: var(--muted); }
+  .asset.warn .dev { color: var(--warn); font-weight: 600; }
+  label.field { display: block; margin-top: 10px; font-size: 14px; color: var(--muted); }
+  input, select {
+    width: 100%; font: inherit; font-size: 17px; color: var(--text); background: var(--bg);
+    border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin-top: 4px;
+    -webkit-appearance: none; appearance: none;
+  }
+  input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  input.invalid { border-color: var(--bad); }
+  .err { color: var(--bad); font-size: 14px; margin-top: 6px; }
+  button {
+    font: inherit; font-weight: 600; border: 0; border-radius: 12px; padding: 13px 16px;
+    background: var(--accent); color: var(--accent-text); width: 100%; margin-top: 12px; cursor: pointer;
+  }
+  button.secondary { background: var(--soft); color: var(--accent); }
+  button.ghost { background: transparent; color: var(--bad); width: auto; padding: 8px 4px; margin: 0; font-weight: 500; }
+  button.inline { width: auto; margin: 0; padding: 9px 14px; }
+  button:disabled { opacity: .5; }
+  .note { background: var(--soft); border-radius: 12px; padding: 10px 12px; font-size: 14.5px; margin-bottom: 12px; }
+  .note.warn { background: var(--warn-bg); color: var(--warn); }
+  .note.bad { background: var(--bad-bg); color: var(--bad); }
+  .step { background: var(--soft); border-radius: 12px; padding: 12px; margin-top: 12px; }
+  .res { border-top: 1px solid var(--line); padding: 12px 0 2px; }
+  .res:first-of-type { border-top: 0; }
+  .res.zero { opacity: .55; }
+  .res .amt { font-size: 18px; font-weight: 650; }
+  details summary { cursor: pointer; font-weight: 600; padding: 2px 0; }
+  details[open] summary { margin-bottom: 4px; }
+  .set-row { border-top: 1px solid var(--line); padding-top: 10px; margin-top: 10px; }
+  .set-row:first-child { border-top: 0; margin-top: 0; padding-top: 0; }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  nav {
+    position: fixed; left: 0; right: 0; bottom: 0; display: flex; justify-content: center;
+    background: var(--card); border-top: 1px solid var(--line);
+    padding: 6px 8px calc(6px + env(safe-area-inset-bottom));
+  }
+  nav .inner { display: flex; width: 100%; max-width: 560px; gap: 6px; }
+  nav button {
+    margin: 0; padding: 12px 6px; background: transparent; color: var(--muted); font-weight: 600;
+  }
+  nav button[aria-current="page"] { background: var(--soft); color: var(--accent); }
+  #toast {
+    position: fixed; left: 16px; right: 16px; bottom: calc(84px + env(safe-area-inset-bottom));
+    max-width: 528px; margin: 0 auto; background: var(--text); color: var(--bg);
+    border-radius: 12px; padding: 12px 14px; font-size: 15px; opacity: 0; transform: translateY(8px);
+    transition: opacity .2s, transform .2s; pointer-events: none;
+  }
+  #toast.show { opacity: 1; transform: none; }
+</style>
+</head>
+<body>
+<main id="view" aria-live="polite"></main>
+<nav>
+  <div class="inner">
+    <button data-nav="home" aria-current="page">Dengele</button>
+    <button data-nav="history">Geçmiş</button>
+    <button data-nav="settings">Ayarlar</button>
+  </div>
+</nav>
+<div id="toast" role="status"></div>
+<script src="calc.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

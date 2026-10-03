@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Testler</title>
+<style>body{font:15px system-ui;margin:16px}.ok{color:#1a7f37}.fail{color:#c62828}</style>
+</head>
+<body>
+<h1>Hesaplama testleri</h1>
+<ul id="out"></ul>
+<p id="sum"></p>
+<script src="calc.js"></script>
+<script>
+  var pass = 0, fail = 0, out = document.getElementById('out');
+  function eq(a, b) { return JSON.stringify(a) === JSON.stringify(b); }
+  window.__assert = {
+    ok: function (v, m) { if (!v) throw new Error(m || 'ok başarısız'); },
+    strictEqual: function (a, b) { if (a !== b) throw new Error(a + ' !== ' + b); },
+    deepStrictEqual: function (a, b) { if (!eq(a, b)) throw new Error(JSON.stringify(a) + ' ≠ ' + JSON.stringify(b)); }
+  };
+  window.__test = function (name, fn) {
+    var li = document.createElement('li');
+    try { fn(); li.className = 'ok'; li.textContent = '✓ ' + name; pass++; }
+    catch (e) { li.className = 'fail'; li.textContent = '✗ ' + name + ' — ' + e.message; fail++; }
+    out.appendChild(li);
+  };
+</script>
+<script src="calc.test.js"></script>
+<script>document.getElementById('sum').textContent = pass + ' geçti, ' + fail + ' kaldı';</script>
+</body>
+</html>
