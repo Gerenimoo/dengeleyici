@@ -3,7 +3,7 @@
   'use strict';
 
   var KEY = 'pd.v1';
-  var VERSION = 6;
+  var VERSION = 7;
   var SCAN_URL = 'https://scanner.tradingview.com/global/scan';
   var FX_SYM = 'FX_IDC:USDTRY';
   var OZ_SYM = 'OANDA:XAUUSD';
@@ -37,6 +37,8 @@
   var applied = false;   // alımlar adetlere eklendi mi
   var appliedTs = null;  // uygulanan alımın Geçmiş kaydı (geri alma için)
   var amountText = null; // tutar alanına yazılan ama henüz hesaplanmamış metin
+  var editing = false;   // adetler kilitli; yalnızca "Adetleri düzenle" ile açılır
+  var qtyText = {};      // düzenleme sırasında yazılan adetler (kaydedilene dek)
   var fetchStatus = null;
   var fetching = false;
 
@@ -269,14 +271,24 @@
 
     // Varlık kartları
     var prem = premium();
+    if (editing) {
+      h += '<div class="note warn">Adetleri Midas\'taki gibi gir, sonra aşağıdan "Adetleri kaydet"e bas.</div>';
+    } else {
+      h += '<button class="secondary" data-action="editQty" style="margin:0 0 12px">Adetleri düzenle</button>';
+    }
     v.rows.forEach(function (r) {
       var a = state.assets.filter(function (x) { return x.id === r.id; })[0];
       var warn = r.deviation != null && Math.abs(r.deviation) > DEV_LIMIT;
       h += '<section class="card asset' + (warn ? ' warn' : '') + '">';
       h += '<div class="row"><div><b>' + esc(a.name) + '</b> <span class="muted small">' + (a.currency === 'USD' ? 'USD' : 'TL') + '</span></div>';
       h += '<div class="dev num">' + (r.deviation != null ? 'Sapma ' + signed(r.deviation) + ' puan' : '') + '</div></div>';
-      h += '<label class="field">Adet<input data-qty="' + a.id + '" inputmode="decimal" autocomplete="off" value="' + esc(inputVal(a.qty)) + '"></label>';
-      h += '<div class="err" data-err="' + a.id + '" hidden></div>';
+      if (editing) {
+        h += '<label class="field">Adet<input data-qty="' + a.id + '" inputmode="decimal" autocomplete="off" value="' +
+          esc(qtyText[a.id] != null ? qtyText[a.id] : inputVal(a.qty)) + '"></label>';
+        h += '<div class="err" data-err="' + a.id + '" hidden></div>';
+      } else {
+        h += '<div class="row" style="margin-top:10px"><span class="small muted">Adet</span><b class="num">' + units(a.qty || 0, a.currency) + '</b></div>';
+      }
       h += '<div class="row" style="margin-top:10px"><span class="small muted">Oran</span><span class="num">' +
         (r.ratio != null ? pct(r.ratio) : '—') + ' <span class="muted">· hedef %' + fmt(a.target, 0, 2) + '</span></span></div>';
       if (a.gold) {
@@ -285,6 +297,12 @@
       }
       h += '</section>';
     });
+
+    if (editing) {
+      h += '<div class="err" id="qtyErr" hidden></div>';
+      h += '<button data-action="saveQty">Adetleri kaydet</button>';
+      h += '<button class="secondary" data-action="cancelQty" style="margin-bottom:12px">Vazgeç</button>';
+    }
 
     // Hesap
     h += '<section class="card"><h2>Bu ay</h2>';
@@ -360,23 +378,52 @@
     return h + '<p class="small muted">Bir kaydı silersen o kayıtla eklenen adetler de geri alınır.</p>' + foot;
   }
 
-  // Değişiklikten sonra yeniden çiz; kullanıcının dokunduğu yeni alanın odağını koru
-  function rerender() {
-    setTimeout(function () {
-      var a = document.activeElement, sel = null;
-      if (a && a.getAttribute) {
-        if (a.id) sel = '#' + a.id;
-        else if (a.hasAttribute('data-qty')) sel = '[data-qty="' + a.getAttribute('data-qty') + '"]';
-      }
-      render();
-      var n = sel && document.querySelector(sel);
-      if (n) n.focus();
-    }, 0);
-  }
-
   // ---------- Eylemler ----------
 
+  function startEdit() {
+    editing = true;
+    qtyText = {};
+    result = null;   // adetler değişecek; eski hesap geçersiz
+    render();
+  }
+
+  function cancelEdit() {
+    editing = false;
+    qtyText = {};
+    render();
+  }
+
+  // Tüm kutuları okur, doğrular, değişiklikleri gösterip onay ister
+  function saveEdit() {
+    var errEl = document.getElementById('qtyErr');
+    var next = {}, bad = [], changes = [];
+    document.querySelectorAll('[data-qty]').forEach(function (inp) {
+      var id = inp.getAttribute('data-qty');
+      var n = parseNum(inp.value);
+      if (n == null) n = 0;
+      var a = state.assets.filter(function (x) { return x.id === id; })[0];
+      if (!isFinite(n) || n < 0) { bad.push(a.name); inp.classList.add('invalid'); return; }
+      next[id] = n;
+      if (Math.abs(n - (a.qty || 0)) > 1e-9) changes.push(a.name + ': ' + units(a.qty || 0, a.currency) + ' → ' + units(n, a.currency));
+    });
+    if (bad.length) {
+      errEl.textContent = 'Geçerli bir adet girin (ör. 12 ya da 3,5): ' + bad.join(', ');
+      errEl.hidden = false;
+      return;
+    }
+    if (!changes.length) { cancelEdit(); toast('Adetler değişmedi'); return; }
+    if (!confirm('Adetler şöyle değişecek:\n\n' + changes.join('\n') + '\n\nOnaylıyor musun?')) return;
+    state.assets.forEach(function (a) { if (a.id in next) a.qty = next[a.id]; });
+    editing = false;
+    qtyText = {};
+    result = null;
+    save();
+    render();
+    toast('Adetler kaydedildi');
+  }
+
   function doCalc() {
+    if (editing) { toast('Önce adetleri kaydet ya da vazgeç.'); return; }
     var input = document.getElementById('amount');
     var amount = parseNum(input.value);
     applied = false;
@@ -484,25 +531,23 @@
     else if (act === 'apply') applyBuys();
     else if (act === 'delRec') deleteRecord(b.getAttribute('data-ts'));
     else if (act === 'undo') deleteRecord(appliedTs);
+    else if (act === 'editQty') startEdit();
+    else if (act === 'saveQty') saveEdit();
+    else if (act === 'cancelQty') cancelEdit();
   });
 
   document.addEventListener('change', function (e) {
     var t = e.target;
+    // Düzenlemede yazılanlar yalnızca taslakta tutulur; "Adetleri kaydet" olmadan kaydedilmez
     if (t.hasAttribute('data-qty')) {
       var id = t.getAttribute('data-qty');
       var n = parseNum(t.value);
       var err = document.querySelector('[data-err="' + id + '"]');
-      if (n == null) n = 0;
-      if (!isFinite(n) || n < 0) {
-        t.classList.add('invalid');
-        err.textContent = 'Geçerli bir adet girin (ör. 12 ya da 3,5).';
-        err.hidden = false;
-        return;
-      }
-      state.assets.forEach(function (a) { if (a.id === id) a.qty = n; });
-      result = null;
-      save();
-      rerender();
+      qtyText[id] = t.value;
+      var ok = n == null || (isFinite(n) && n >= 0);
+      t.classList.toggle('invalid', !ok);
+      err.textContent = ok ? '' : 'Geçerli bir adet girin (ör. 12 ya da 3,5).';
+      err.hidden = ok;
     }
   });
 
