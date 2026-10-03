@@ -1,6 +1,6 @@
 // Uygulama dosyalarını telefona kaydeder, internet olmadan da açılsın diye.
 // Portföy verilerine dokunmaz; onlar yalnızca telefonun hafızasında durur.
-var CACHE = 'dengeleyici-v1';
+var CACHE = 'dengeleyici-v5';
 var FILES = ['./', 'index.html', 'app.js', 'calc.js', 'manifest.json', 'apple-touch-icon.png', 'icon-192.png', 'icon-512.png'];
 
 self.addEventListener('install', function (e) {

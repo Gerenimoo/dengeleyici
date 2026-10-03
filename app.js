@@ -8,6 +8,8 @@
   var OZ_SYM = 'OANDA:XAUUSD';
   var REMIND_DAYS = 25;
   var DEV_LIMIT = 5;
+  var MIN_BUY = 500;     // bunun altındaki alımlar önerilmez (TL)
+  var AUTO_MS = 60 * 1000; // uygulama açıkken otomatik yenileme aralığı
 
   var DEFAULT_ASSETS = [
     { id: 'voo', name: 'VOO', currency: 'USD', target: 50, symbol: 'AMEX:VOO', qty: 0 },
@@ -19,9 +21,9 @@
   function freshState() {
     return {
       assets: JSON.parse(JSON.stringify(DEFAULT_ASSETS)),
-      prices: {},        // { assetId: { value, manual } }
-      fx: null,          // { value, manual }
-      gram: null,        // { value, manual }
+      prices: {},        // { assetId: { value } }
+      fx: null,          // { value }
+      gram: null,        // { value }
       updatedAt: null,   // son başarılı çekme
       amount: null,      // son girilen eklenecek tutar
       history: []        // aylık kayıtlar
@@ -32,10 +34,9 @@
   var view = 'home';
   var result = null;     // son hesap sonucu (ekranda tutulur)
   var applied = false;   // alımlar adetlere eklendi mi
+  var amountText = null; // tutar alanına yazılan ama henüz hesaplanmamış metin
   var fetchStatus = null;
   var fetching = false;
-  var draft = null;      // ayarlar taslağı
-  var manualOpen = false; // "Fiyatları elle gir" açık mı
 
   // ---------- Kayıt (localStorage + IndexedDB kopyası) ----------
 
@@ -144,11 +145,14 @@
 
   // ---------- Fiyat çekme ----------
 
-  function refresh() {
+  // quiet: otomatik yenileme — "alınıyor" yazısı ve bildirim balonu göstermez
+  function refresh(quiet) {
     if (fetching) return;
     fetching = true;
-    fetchStatus = { text: 'Fiyatlar alınıyor…' };
-    render();
+    if (!quiet) {
+      fetchStatus = { text: 'Fiyatlar alınıyor…' };
+      render();
+    }
 
     var withSym = state.assets.filter(function (a) { return a.symbol; });
     var tickers = withSym.map(function (a) { return a.symbol; }).concat([FX_SYM, OZ_SYM]);
@@ -170,50 +174,66 @@
       });
       var missing = [];
       var fx = map[FX_SYM] ? map[FX_SYM].price : null;
-      if (fx) state.fx = { value: fx, manual: false }; else missing.push('USD/TL kuru');
+      if (fx) state.fx = { value: fx }; else missing.push('USD/TL kuru');
       var oz = map[OZ_SYM] ? map[OZ_SYM].price : null;
-      if (oz && fx) state.gram = { value: Calc.gramGoldFromSpot(oz, fx), manual: false };
+      if (oz && fx) state.gram = { value: Calc.gramGoldFromSpot(oz, fx) };
       else missing.push('gram altın');
       withSym.forEach(function (a) {
         var m = map[a.symbol];
         var want = a.currency === 'USD' ? 'USD' : 'TRY';
-        if (m && (!m.currency || m.currency === want)) state.prices[a.id] = { value: m.price, manual: false };
+        if (m && (!m.currency || m.currency === want)) state.prices[a.id] = { value: m.price };
         else missing.push(a.name + (m ? ' (para birimi ' + m.currency + ')' : ''));
       });
-      state.assets.forEach(function (a) { if (!a.symbol && !priceOf(a)) missing.push(a.name); });
       state.updatedAt = Date.now();
       save();
       fetchStatus = missing.length
-        ? { text: 'Alınamayanlar: ' + missing.join(', ') + '. Bunları "Fiyatları elle gir" bölümünden girebilirsin.', warn: true }
+        ? { text: 'Alınamayanlar: ' + missing.join(', ') + '. Bunlar için son alınan fiyat kullanılıyor; biraz sonra tekrar dene.', warn: true }
         : null;
-      if (!missing.length) toast('Fiyatlar güncellendi');
+      if (!missing.length && !quiet) toast('Fiyatlar güncellendi');
+      // Ekranda (henüz uygulanmamış) bir sonuç varsa yeni fiyatlarla yeniden hesapla
+      if (result && result.rows && !applied && state.amount) result = compute(state.amount);
     }).catch(function () {
       fetchStatus = {
         text: (navigator.onLine === false ? 'İnternet bağlantısı yok.' : 'Fiyat kaynağı yanıt vermedi.') +
-          ' Fiyatları "Fiyatları elle gir" bölümünden girebilirsin.',
+          (state.updatedAt ? ' Son alınan fiyatlar (' + dateTime(state.updatedAt) + ') kullanılıyor.' : ' Bağlantını kontrol edip tekrar dene.'),
         warn: true
       };
     }).then(function () {
       clearTimeout(timer);
       fetching = false;
-      render();
+      safeRender();
     });
+  }
+
+  // Kullanıcı bir alana yazarken ekranı yeniden çizme; yazma bitince çiz
+  var renderWait = null;
+  function typing() { var a = document.activeElement; return !!a && a.tagName === 'INPUT'; }
+  function safeRender() {
+    if (!typing()) { render(); return; }
+    if (renderWait) return;
+    renderWait = setInterval(function () {
+      if (typing()) return;
+      clearInterval(renderWait);
+      renderWait = null;
+      render();
+    }, 1000);
+  }
+
+  function autoRefresh() {
+    if (document.visibilityState !== 'visible') return;
+    if (!state.updatedAt || Date.now() - state.updatedAt > 30 * 1000) refresh(true);
   }
 
   // ---------- Ekranlar ----------
 
   function render() {
     var el = document.getElementById('view');
-    if (view === 'home') el.innerHTML = homeHTML();
-    else if (view === 'history') el.innerHTML = historyHTML();
-    else el.innerHTML = settingsHTML();
+    el.innerHTML = view === 'history' ? historyHTML() : homeHTML();
     document.querySelectorAll('nav button').forEach(function (b) {
       if (b.getAttribute('data-nav') === view) b.setAttribute('aria-current', 'page');
       else b.removeAttribute('aria-current');
     });
   }
-
-  function manualBadge(o) { return o && o.manual ? ' <span class="badge">elle</span>' : ''; }
 
   function homeHTML() {
     var fx = fxVal();
@@ -237,10 +257,10 @@
     } else {
       h += '<div class="big">—</div><div class="muted small">Eksik fiyat ya da kur var.</div>';
     }
-    h += '<div class="small muted" style="margin-top:8px">Son güncelleme: ' +
+    h += '<div class="small muted" style="margin-top:8px">Fiyatların son güncellemesi: ' +
       (state.updatedAt ? dateTime(state.updatedAt) : 'henüz yok') + '</div>';
-    h += '<div class="small muted num">USD/TL: ' + (fx ? fmt(fx, 4) : '—') + manualBadge(state.fx) +
-      ' · Gram altın: ' + (gramVal() ? tl2(gramVal()) : '—') + manualBadge(state.gram) + '</div>';
+    h += '<div class="small muted num">USD/TL: ' + (fx ? fmt(fx, 4) : '—') +
+      ' · Gram altın: ' + (gramVal() ? tl2(gramVal()) : '—') + '</div>';
     if (fetchStatus) h += '<div class="note ' + (fetchStatus.warn ? 'warn' : '') + '" style="margin:10px 0 0">' + esc(fetchStatus.text) + '</div>';
     h += '<button data-action="refresh"' + (fetching ? ' disabled' : '') + '>' + (fetching ? 'Güncelleniyor…' : 'Güncelle') + '</button>';
     h += '</section>';
@@ -255,44 +275,22 @@
       h += '<div class="dev num">' + (r.deviation != null ? 'Sapma ' + signed(r.deviation) + ' puan' : '') + '</div></div>';
       h += '<label class="field">Adet<input data-qty="' + a.id + '" inputmode="decimal" autocomplete="off" value="' + esc(inputVal(a.qty)) + '"></label>';
       h += '<div class="err" data-err="' + a.id + '" hidden></div>';
-      h += '<div class="grid3">';
-      h += '<div><span class="lbl">Fiyat</span><span class="val">' +
-        (r.price ? (a.currency === 'USD' ? usd(r.price) : tl2(r.price)) : '—') + manualBadge(state.prices[a.id]) + '</span></div>';
-      h += '<div><span class="lbl">Değer</span><span class="val">' + (r.valueTL != null ? tl(r.valueTL) : '—') +
-        (a.currency === 'USD' && r.valueNative != null ? '<br><span class="muted small">' + usd(r.valueNative) + '</span>' : '') + '</span></div>';
-      h += '<div><span class="lbl">Oran / hedef</span><span class="val">' + (r.ratio != null ? pct(r.ratio) : '—') +
-        ' <span class="muted">/ %' + fmt(a.target, 0, 2) + '</span></span></div>';
-      h += '</div>';
+      h += '<div class="row" style="margin-top:10px"><span class="small muted">Oran</span><span class="num">' +
+        (r.ratio != null ? pct(r.ratio) : '—') + ' <span class="muted">· hedef %' + fmt(a.target, 0, 2) + '</span></span></div>';
       if (a.gold) {
         h += '<div class="row" style="margin-top:10px"><span class="small muted">Altın primi</span>' +
-          (prem ? '<span class="pill ' + prem.level + ' num">' + pct(prem.value) + '</span>' : '<span class="muted small">gram altın fiyatı gerekli</span>') + '</div>';
+          (prem ? '<span class="pill ' + prem.level + ' num">' + pct(prem.value) + '</span>' : '<span class="muted small">fiyatlar bekleniyor</span>') + '</div>';
       }
       h += '</section>';
     });
 
-    // Elle giriş
-    h += '<details class="card" id="manual"' + (manualOpen ? ' open' : '') + '><summary>Fiyatları elle gir</summary>';
-    h += '<p class="small muted" style="margin:6px 0 0">Elle girilen değerler "elle" etiketiyle görünür. "Güncelle" başarılı olursa yerlerine güncel fiyat gelir.</p>';
-    h += '<div class="two">';
-    h += priceField('fx', 'USD/TL kuru', state.fx);
-    h += priceField('gram', 'Gram altın (TL)', state.gram);
-    state.assets.forEach(function (a) {
-      h += priceField('p:' + a.id, esc(a.name) + ' (' + (a.currency === 'USD' ? '$' : 'TL') + ')', state.prices[a.id]);
-    });
-    h += '</div><div class="err" data-err="price" hidden></div></details>';
-
     // Hesap
     h += '<section class="card"><h2>Bu ay</h2>';
-    h += '<label class="field">Bu ay eklenecek tutar (TL)<input id="amount" inputmode="decimal" autocomplete="off" placeholder="ör. 35.000" value="' + esc(inputVal(state.amount, 2)) + '"></label>';
+    h += '<label class="field">Bu ay eklenecek tutar (TL)<input id="amount" inputmode="decimal" autocomplete="off" placeholder="ör. 35.000" value="' + esc(amountText != null ? amountText : inputVal(state.amount, 2)) + '"></label>';
     h += '<button data-action="calc">Hesapla</button>';
     h += resultHTML();
     h += '</section>';
     return h;
-  }
-
-  function priceField(key, label, o) {
-    return '<label class="field">' + label + '<input data-price="' + key + '" inputmode="decimal" autocomplete="off" value="' +
-      esc(o ? inputVal(o.value, 4) : '') + '"></label>';
   }
 
   function resultHTML() {
@@ -317,24 +315,23 @@
       h += '<div class="row small"><span class="muted">Yaklaşık adet</span><span class="num">' + units(x.units, x.currency) + '</span></div>';
       h += '<div class="row small"><span class="muted">Oran</span><span class="num">' +
         pct(x.ratio) + ' → ' + pct(x.afterRatio) + ' <span class="muted">· hedef %' + fmt(x.target, 0, 2) + '</span></span></div>';
-      if (!x.included) h += '<div class="small" style="color:var(--bad)">Prim çok yüksek, bu ay altın alımını ertele.</div>';
+      if (x.small) h += '<div class="small muted">' + tl(MIN_BUY) + '\'den küçük kaldığı için bu ay atlandı, payı diğerlerine kaydırıldı.</div>';
+      else if (!x.included) h += '<div class="small" style="color:var(--bad)">Prim çok yüksek, bu ay altın alımını ertele.</div>';
       h += '</div>';
     });
     if (r.leftoverTL >= 1) {
       h += '<div class="small muted" style="margin-top:8px">Adetler aşağı yuvarlandığı için artan: ' + tl(r.leftoverTL) + '</div>';
     }
-    h += '<button class="secondary" data-action="apply"' + (applied ? ' disabled' : '') + '>' +
-      (applied ? 'Adetlere eklendi' : 'Alımları yaptım, adetlere ekle') + '</button>';
-    h += '<button class="secondary" data-action="saveMonth">Bu ayı kaydet</button>';
+    h += '<button data-action="apply"' + (applied ? ' disabled' : '') + '>' +
+      (applied ? 'Adetlere eklendi, bu ay kaydedildi' : 'Alımları yaptım, adetlere ekle') + '</button>';
+    if (!applied) h += '<div class="tiny muted" style="margin-top:6px">Adetlerini günceller ve bu ayı Geçmiş\'e otomatik kaydeder.</div>';
     h += '</div>';
     return h;
   }
 
   function historyHTML() {
     var h = '<h1>Geçmiş</h1>';
-    h += '<section class="card"><p class="small muted" style="margin:0">Bu ayın tarihini, kuru, fiyatları, adetleri ve eklenen tutarı kaydeder.</p>';
-    h += '<button data-action="saveMonth">Bu ayı kaydet</button></section>';
-    if (!state.history.length) return h + '<p class="muted">Henüz kayıt yok.</p>';
+    if (!state.history.length) return h + '<p class="muted">Henüz kayıt yok. "Alımları yaptım, adetlere ekle"ye bastığında o ay buraya otomatik kaydedilir.</p>';
     state.history.slice().reverse().forEach(function (rec) {
       h += '<section class="card">';
       h += '<div class="row"><b>' + date(rec.ts) + '</b><button class="ghost" data-action="delRec" data-ts="' + rec.ts + '">Sil</button></div>';
@@ -351,50 +348,6 @@
     return h;
   }
 
-  function settingsHTML() {
-    if (!draft) draft = state.assets.map(function (a) { return Object.assign({}, a); });
-    var sum = draftSum();
-    var h = '<h1>Ayarlar</h1>';
-    h += '<section class="card"><h2>Varlıklar ve hedef oranlar</h2>';
-    draft.forEach(function (a, i) {
-      h += '<div class="set-row">';
-      h += '<div class="two"><label class="field">Ad<input data-d="name" data-i="' + i + '" value="' + esc(a.name) + '" autocomplete="off"></label>';
-      h += '<label class="field">Hedef (%)<input data-d="target" data-i="' + i + '" inputmode="decimal" value="' +
-        esc(a.targetText != null ? a.targetText : inputVal(a.target, 2)) + '"></label></div>';
-      h += '<div class="two"><label class="field">Para birimi<select data-d="currency" data-i="' + i + '">' +
-        '<option value="USD"' + (a.currency === 'USD' ? ' selected' : '') + '>USD</option>' +
-        '<option value="TRY"' + (a.currency === 'TRY' ? ' selected' : '') + '>TL</option></select></label>';
-      h += '<label class="field">Fiyat sembolü<input data-d="symbol" data-i="' + i + '" value="' + esc(a.symbol || '') +
-        '" placeholder="boş = elle" autocomplete="off" autocapitalize="characters"></label></div>';
-      h += '<div class="row" style="margin-top:4px"><span class="tiny muted">' + (a.gold ? 'Altın primi bu varlık için hesaplanır.' : '') + '</span>' +
-        '<button class="ghost" data-action="delAsset" data-i="' + i + '">Çıkar</button></div>';
-      h += '</div>';
-    });
-    h += '<div class="row" style="margin-top:12px"><span>Toplam</span><b class="num" id="setSum">' + sumText(sum) + '</b></div>';
-    h += '<div class="err" id="setErr" hidden></div>';
-    h += '<button class="secondary" data-action="addAsset">Varlık ekle</button>';
-    h += '<button data-action="saveSettings">Kaydet</button>';
-    h += '</section>';
-    h += '<section class="card small muted">';
-    h += '<p style="margin-top:0"><b>Fiyat sembolü</b> TradingView biçimindedir, ör. <code>NASDAQ:QQQ</code> ya da <code>BIST:ALTIN</code>. Boş bırakılırsa fiyat elle girilir.</p>';
-    h += '<p>Fiyatlar TradingView\'den alınır, birkaç dakika gecikmeli olabilir. Gram altın spot fiyattan hesaplanır (ons × kur ÷ 31,1035).</p>';
-    h += '<p style="margin-bottom:0">Veriler yalnızca bu telefonda tutulur ve her değişiklikte otomatik olarak iki ayrı yere kaydedilir. Uygulamayı ana ekrandan açmak verilerin silinmemesi için en güvenli yoldur.</p>';
-    h += '</section>';
-    return h;
-  }
-
-  function draftSum() {
-    return draft.reduce(function (s, a) {
-      var t = parseNum(a.targetText != null ? a.targetText : a.target);
-      return s + (isFinite(t) && t ? t : 0);
-    }, 0);
-  }
-
-  function sumText(sum) {
-    var ok = Math.abs(sum - 100) < 0.001;
-    return '<span style="color:' + (ok ? 'var(--good)' : 'var(--bad)') + '">%' + fmt(sum, 0, 2) + '</span>';
-  }
-
   // Değişiklikten sonra yeniden çiz; kullanıcının dokunduğu yeni alanın odağını koru
   function rerender() {
     setTimeout(function () {
@@ -402,7 +355,6 @@
       if (a && a.getAttribute) {
         if (a.id) sel = '#' + a.id;
         else if (a.hasAttribute('data-qty')) sel = '[data-qty="' + a.getAttribute('data-qty') + '"]';
-        else if (a.hasAttribute('data-price')) sel = '[data-price="' + a.getAttribute('data-price') + '"]';
       }
       render();
       var n = sel && document.querySelector(sel);
@@ -423,13 +375,17 @@
     }
     state.amount = amount;
     save();
+    result = compute(amount);
+    render();
+  }
+
+  function compute(amount) {
     var prem = premium();
     var g = goldAsset();
     var skip = prem && prem.level === 'red' && g && state.assets.length > 1;
-    var res = Calc.rebalance(calcInput(), fxVal(), amount, skip ? [g.id] : []);
+    var res = Calc.rebalanceMin(calcInput(), fxVal(), amount, skip ? [g.id] : [], MIN_BUY);
     if (!res.errors.length && skip) res.goldSkipped = prem.value;
-    result = res;
-    render();
+    return res;
   }
 
   function applyBuys() {
@@ -437,22 +393,22 @@
     var list = result.rows.filter(function (x) { return x.units > 0; })
       .map(function (x) { return x.name + ' +' + units(x.units, x.currency); });
     if (!list.length) { toast('Eklenecek adet yok.'); return; }
-    if (!confirm('Şu adetler mevcut adetlerine eklenecek:\n\n' + list.join('\n') + '\n\nGerçekte farklı adet aldıysan sonra kartlardan düzeltebilirsin.')) return;
+    if (!confirm('Şu adetler mevcut adetlerine eklenecek ve bu ay Geçmiş\'e kaydedilecek:\n\n' + list.join('\n') + '\n\nGerçekte farklı adet aldıysan sonra kartlardan düzeltebilirsin.')) return;
     result.rows.forEach(function (x) {
       var a = state.assets.filter(function (y) { return y.id === x.id; })[0];
       if (a && x.units > 0) a.qty = Calc.floorTo((a.qty || 0) + x.units + 1e-9, 4);
     });
     applied = true;
-    save();
-    render();
-    toast('Adetler güncellendi');
+    saveMonth();
+    toast('Adetler güncellendi, bu ay kaydedildi');
   }
 
   function saveMonth() {
     var fx = fxVal();
     var v = Calc.valuate(calcInput(), fx);
     if (v.totalTL == null || !fx) {
-      toast('Kaydetmek için tüm fiyatlar ve kur gerekli.');
+      save();
+      render();
       return;
     }
     state.history.push({
@@ -468,7 +424,6 @@
     });
     save();
     render();
-    toast('Bu ay kaydedildi');
   }
 
   function deleteRecord(ts) {
@@ -478,51 +433,12 @@
     render();
   }
 
-  function saveSettings() {
-    var errEl = document.getElementById('setErr');
-    var errs = [];
-    var names = {};
-    var out = draft.map(function (a) {
-      var t = parseNum(a.targetText != null ? a.targetText : a.target);
-      var name = String(a.name || '').trim();
-      if (!name) errs.push('Her varlığın bir adı olmalı.');
-      else if (names[name.toLowerCase()]) errs.push('"' + name + '" adı iki kez kullanılmış.');
-      names[name.toLowerCase()] = true;
-      if (t == null || !isFinite(t) || t < 0 || t > 100) errs.push((name || 'Bir varlık') + ' için hedef 0–100 arası olmalı.');
-      return Object.assign({}, a, { name: name, target: t, symbol: String(a.symbol || '').trim().toUpperCase() });
-    });
-    if (!out.length) errs.push('En az bir varlık olmalı.');
-    var sum = out.reduce(function (s, a) { return s + (isFinite(a.target) ? a.target : 0); }, 0);
-    if (!errs.length && Math.abs(sum - 100) > 0.001) errs.push('Hedeflerin toplamı %100 olmalı. Şu an %' + fmt(sum, 0, 2) + '. Kaydedilmedi.');
-    if (errs.length) {
-      errEl.innerHTML = errs.filter(function (e, i) { return errs.indexOf(e) === i; }).map(esc).join('<br>');
-      errEl.hidden = false;
-      return;
-    }
-    var keep = {};
-    state.assets = out.map(function (a) {
-      delete a.targetText;
-      keep[a.id] = true;
-      var old = state.assets.filter(function (x) { return x.id === a.id; })[0];
-      // Para birimi ya da sembol değiştiyse eski fiyat geçersiz
-      if (old && (old.currency !== a.currency || old.symbol !== a.symbol)) delete state.prices[a.id];
-      return a;
-    });
-    Object.keys(state.prices).forEach(function (id) { if (!keep[id]) delete state.prices[id]; });
-    result = null;
-    draft = null;
-    save();
-    render();
-    toast('Ayarlar kaydedildi');
-  }
-
   // ---------- Olaylar ----------
 
   document.addEventListener('click', function (e) {
     var nav = e.target.closest('[data-nav]');
     if (nav) {
       view = nav.getAttribute('data-nav');
-      if (view !== 'settings') draft = null;
       render();
       window.scrollTo(0, 0);
       return;
@@ -533,18 +449,7 @@
     if (act === 'refresh') refresh();
     else if (act === 'calc') doCalc();
     else if (act === 'apply') applyBuys();
-    else if (act === 'saveMonth') saveMonth();
     else if (act === 'delRec') deleteRecord(b.getAttribute('data-ts'));
-    else if (act === 'addAsset') {
-      draft.push({ id: 'a' + Date.now().toString(36), name: '', currency: 'USD', target: 0, symbol: '', qty: 0 });
-      render();
-    } else if (act === 'delAsset') {
-      var i = +b.getAttribute('data-i');
-      if (confirm((draft[i].name || 'Bu varlık') + ' çıkarılsın mı? ("Kaydet"e basınca geçerli olur.)')) {
-        draft.splice(i, 1);
-        render();
-      }
-    } else if (act === 'saveSettings') saveSettings();
   });
 
   document.addEventListener('change', function (e) {
@@ -564,44 +469,12 @@
       result = null;
       save();
       rerender();
-    } else if (t.hasAttribute('data-price')) {
-      var key = t.getAttribute('data-price');
-      var v = parseNum(t.value);
-      var perr = document.querySelector('[data-err="price"]');
-      if (v != null && (!isFinite(v) || v <= 0)) {
-        t.classList.add('invalid');
-        perr.textContent = 'Fiyat 0\'dan büyük bir sayı olmalı.';
-        perr.hidden = false;
-        return;
-      }
-      var o = v == null ? null : { value: v, manual: true };
-      if (key === 'fx') state.fx = o;
-      else if (key === 'gram') state.gram = o;
-      else {
-        var aid = key.slice(2);
-        if (o) state.prices[aid] = o; else delete state.prices[aid];
-      }
-      result = null;
-      save();
-      rerender();
     }
   });
 
-  // Ayar taslağı: yazarken güncelle, ekranı yeniden çizme (odak kaybolmasın)
   document.addEventListener('input', function (e) {
-    var t = e.target;
-    if (!t.hasAttribute('data-d') || !draft) return;
-    var row = draft[+t.getAttribute('data-i')];
-    var field = t.getAttribute('data-d');
-    if (field === 'target') row.targetText = t.value;
-    else row[field] = t.value;
-    var el = document.getElementById('setSum');
-    if (el) el.innerHTML = sumText(draftSum());
+    if (e.target.id === 'amount') amountText = e.target.value;
   });
-
-  document.addEventListener('toggle', function (e) {
-    if (e.target.id === 'manual') manualOpen = e.target.open;
-  }, true);
 
   document.addEventListener('keydown', function (e) {
     if (e.key === 'Enter' && e.target.id === 'amount') { e.target.blur(); doCalc(); }
@@ -626,4 +499,9 @@
 
   if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(function () {});
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(function () {});
+
+  // Açılışta, uygulamaya geri dönünce ve açık kaldıkça dakikada bir fiyatları yenile
+  autoRefresh();
+  setInterval(autoRefresh, AUTO_MS);
+  document.addEventListener('visibilitychange', autoRefresh);
 })();

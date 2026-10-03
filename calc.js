@@ -67,12 +67,12 @@
     var errs = [];
     if (!isPos(amount)) errs.push('Eklenecek tutarı 0\'dan büyük bir sayı olarak girin.');
     if (assets.some(function (a) { return a.currency === 'USD'; }) && !isPos(fx)) {
-      errs.push('USD/TL kuru eksik. "Güncelle"ye basın ya da elle girin.');
+      errs.push('USD/TL kuru eksik. "Güncelle"ye basın.');
     }
     assets.forEach(function (a) {
       var n = a.name || a.id;
       if (!isNonNeg(a.qty)) errs.push(n + ' için adet geçersiz.');
-      if (!isPos(a.price)) errs.push(n + ' için fiyat eksik. "Güncelle"ye basın ya da elle girin.');
+      if (!isPos(a.price)) errs.push(n + ' için fiyat eksik. "Güncelle"ye basın.');
     });
     var sum = assets.reduce(function (s, a) { return s + (a.target || 0); }, 0);
     if (Math.abs(sum - 100) > 0.001) errs.push('Hedef oranların toplamı %100 değil (şu an %' + sum + ').');
@@ -139,6 +139,27 @@
     };
   }
 
+  // Çok küçük alımları önerme: minBuy TL altındaki en küçük öneriyi çıkar,
+  // tutarı kalanlara yeniden dağıt; hepsi sınırı geçene dek tekrarla.
+  // Tek varlık kalırsa tutarın tamamı ona gider.
+  function rebalanceMin(assets, fx, amount, exclude, minBuy) {
+    var skip = (exclude || []).slice();
+    var small = [];
+    for (;;) {
+      var res = rebalance(assets, fx, amount, skip);
+      if (res.errors.length || !minBuy) return res;
+      var inc = res.rows.filter(function (r) { return r.included; });
+      var tiny = inc.filter(function (r) { return r.buyTL > 1e-9 && r.buyTL < minBuy; });
+      if (!tiny.length || inc.length <= 1) {
+        res.rows.forEach(function (r) { r.small = small.indexOf(r.id) !== -1; });
+        return res;
+      }
+      tiny.sort(function (a, b) { return a.buyTL - b.buyTL; });
+      skip.push(tiny[0].id);
+      small.push(tiny[0].id);
+    }
+  }
+
   function daysSince(ts, now) {
     if (!ts) return null;
     return Math.floor(((now || Date.now()) - ts) / 86400000);
@@ -153,6 +174,7 @@
     valuate: valuate,
     validate: validate,
     rebalance: rebalance,
+    rebalanceMin: rebalanceMin,
     daysSince: daysSince
   };
 

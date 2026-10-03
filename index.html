@@ -74,14 +74,6 @@
   .num { font-variant-numeric: tabular-nums; }
   .big { font-size: 30px; font-weight: 650; letter-spacing: -0.5px; }
   .row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-  .grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 10px; }
-  .grid3 > div { min-width: 0; }
-  .lbl { font-size: 12.5px; color: var(--muted); display: block; }
-  .val { font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
-  .badge {
-    display: inline-block; font-size: 11.5px; font-weight: 600; padding: 1px 7px;
-    border-radius: 99px; background: var(--warn-bg); color: var(--warn); vertical-align: 1px;
-  }
   .pill { display: inline-block; padding: 2px 9px; border-radius: 99px; font-weight: 600; font-size: 14px; }
   .pill.green { background: var(--good-bg); color: var(--good); }
   .pill.yellow { background: var(--yellow-bg); color: var(--yellow); }
@@ -116,9 +108,6 @@
   .res .amt { font-size: 18px; font-weight: 650; }
   details summary { cursor: pointer; font-weight: 600; padding: 2px 0; }
   details[open] summary { margin-bottom: 4px; }
-  .set-row { border-top: 1px solid var(--line); padding-top: 10px; margin-top: 10px; }
-  .set-row:first-child { border-top: 0; margin-top: 0; padding-top: 0; }
-  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
   nav {
     position: fixed; left: 0; right: 0; bottom: 0; display: flex; justify-content: center;
     background: var(--card); border-top: 1px solid var(--line);
@@ -144,7 +133,6 @@
   <div class="inner">
     <button data-nav="home" aria-current="page">Dengele</button>
     <button data-nav="history">Geçmiş</button>
-    <button data-nav="settings">Ayarlar</button>
   </div>
 </nav>
 <div id="toast" role="status"></div>

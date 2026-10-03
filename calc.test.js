@@ -77,6 +77,31 @@ test('USD alımda kesirli adet, artan para ve gereken dolar', () => {
   near(r.rows[0].afterRatio, 100, 'alım sonrası oran');
 });
 
+test('500 TL altındaki alımlar önerilmez, tutar diğerlerine kayar', () => {
+  // Kur 49,107; tutar 20.000 → normalde VXUS'a ~64 TL düşüyor
+  const a = [
+    { id: 'VOO', currency: 'USD', target: 50, qty: 10, price: 707.54 },
+    { id: 'QQQ', currency: 'USD', target: 15, qty: 3, price: 749.58 },
+    { id: 'VXUS', currency: 'USD', target: 15, qty: 20, price: 85.43 },
+    { id: 'ALTINS1', currency: 'TRY', target: 20, qty: 0, price: 71.45 }
+  ];
+  const plain = C.rebalance(a, 49.107, 20000);
+  const vx = plain.rows.find(x => x.id === 'VXUS').buyTL;
+  assert.ok(vx > 0 && vx < 500, 'ön koşul: VXUS küçük');
+  const r = C.rebalanceMin(a, 49.107, 20000, [], 500);
+  const by = Object.fromEntries(r.rows.map(x => [x.id, x]));
+  near(by.VXUS.buyTL, 0, 'VXUS atlandı');
+  assert.strictEqual(by.VXUS.small, true);
+  near(r.rows.reduce((s, x) => s + x.buyTL, 0), 20000, 'tutarın tamamı dağıtıldı');
+  assert.ok(r.rows.every(x => x.buyTL === 0 || x.buyTL >= 500));
+});
+
+test('tutar sınırdan küçükse tamamı tek varlığa gider', () => {
+  const r = C.rebalanceMin(sample, 45, 300, [], 500);
+  near(r.rows.reduce((s, x) => s + x.buyTL, 0), 300, 'toplam');
+  assert.strictEqual(r.rows.filter(x => x.buyTL > 0).length, 1);
+});
+
 test('geçersiz girişte anlaşılır hata', () => {
   const r = C.rebalance(sample, 0, -5);
   assert.ok(r.errors.some(e => e.includes('Eklenecek tutar')));
