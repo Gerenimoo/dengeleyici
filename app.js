@@ -3,7 +3,7 @@
   'use strict';
 
   var KEY = 'pd.v1';
-  var VERSION = 8;
+  var VERSION = 9;
   var SCAN_URL = 'https://scanner.tradingview.com/global/scan';
   var FX_SYM = 'FX_IDC:USDTRY';
   var OZ_SYM = 'OANDA:XAUUSD';
@@ -234,6 +234,7 @@
   function render() {
     var el = document.getElementById('view');
     el.innerHTML = view === 'history' ? historyHTML() : homeHTML();
+    document.body.classList.toggle('editing', editing && view !== 'history');
     document.querySelectorAll('nav button').forEach(function (b) {
       if (b.getAttribute('data-nav') === view) b.setAttribute('aria-current', 'page');
       else b.removeAttribute('aria-current');
@@ -264,7 +265,7 @@
     }
     h += '<div class="small muted" style="margin-top:8px">Fiyatların son güncellemesi: ' +
       (state.updatedAt ? dateTime(state.updatedAt) : 'henüz yok') + '</div>';
-    h += '<div class="prices num">';
+    h += '<div class="prices num"><div class="tiny muted" style="margin-bottom:2px">Güncel fiyatlar</div>';
     h += '<div class="row small"><span class="muted">USD/TL</span><span>' + (fx ? fmt(fx, 4) : '—') + '</span></div>';
     h += '<div class="row small"><span class="muted">Gram altın</span><span>' + (gramVal() ? tl2(gramVal()) : '—') + '</span></div>';
     state.assets.forEach(function (a) {
@@ -280,7 +281,8 @@
     // Varlık kartları
     var prem = premium();
     if (editing) {
-      h += '<div class="note warn">Adetleri Midas\'taki gibi gir, sonra aşağıdan "Adetleri kaydet"e bas.</div>';
+      h += '<div class="note warn"><b>Düzenleme açık.</b> Adetleri Midas\'taki gibi gir. Yazdıkların, ekranın altındaki ' +
+        '<b>"Adetleri kaydet"</b>e basıp onaylayana kadar kaydedilmez; toplam ve oranlar kayıtlı adetlerle hesaplanır.</div>';
     } else {
       h += '<button class="secondary" data-action="editQty" style="margin:0 0 12px">Adetleri düzenle</button>';
     }
@@ -293,6 +295,7 @@
       if (editing) {
         h += '<label class="field">Adet<input data-qty="' + a.id + '" inputmode="decimal" autocomplete="off" value="' +
           esc(qtyText[a.id] != null ? qtyText[a.id] : inputVal(a.qty)) + '"></label>';
+        h += '<div class="tiny muted" style="margin-top:4px">Kayıtlı adet: <b class="num">' + units(a.qty || 0, a.currency) + '</b></div>';
         h += '<div class="err" data-err="' + a.id + '" hidden></div>';
       } else {
         h += '<div class="row" style="margin-top:10px"><span class="small muted">Adet</span><b class="num">' + units(a.qty || 0, a.currency) + '</b></div>';
@@ -306,10 +309,11 @@
       h += '</section>';
     });
 
+    // Düzenlemede Kaydet/Vazgeç ekranın altına sabitlenir, kaydırmadan hep görünür
     if (editing) {
-      h += '<div class="err" id="qtyErr" hidden></div>';
-      h += '<button data-action="saveQty">Adetleri kaydet</button>';
-      h += '<button class="secondary" data-action="cancelQty" style="margin-bottom:12px">Vazgeç</button>';
+      h += '<div class="editbar"><div class="err" id="qtyErr" hidden></div><div class="inner">' +
+        '<button class="secondary" data-action="cancelQty">Vazgeç</button>' +
+        '<button data-action="saveQty">Adetleri kaydet</button></div></div>';
     }
 
     // Hesap

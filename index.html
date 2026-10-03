@@ -110,6 +110,14 @@
   .res .amt { font-size: 18px; font-weight: 650; }
   details summary { cursor: pointer; font-weight: 600; padding: 2px 0; }
   details[open] summary { margin-bottom: 4px; }
+  .editbar {
+    position: fixed; left: 0; right: 0; bottom: calc(62px + env(safe-area-inset-bottom)); z-index: 2;
+    background: var(--card); border-top: 1px solid var(--line); padding: 8px 16px;
+  }
+  .editbar .inner { display: flex; gap: 8px; max-width: 528px; margin: 0 auto; }
+  .editbar .inner button { margin: 0; }
+  .editbar .err { max-width: 528px; margin: 0 auto 6px; }
+  body.editing { padding-bottom: calc(150px + env(safe-area-inset-bottom)); }
   nav {
     position: fixed; left: 0; right: 0; bottom: 0; display: flex; justify-content: center;
     background: var(--card); border-top: 1px solid var(--line);
