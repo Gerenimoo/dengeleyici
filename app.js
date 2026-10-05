@@ -3,28 +3,27 @@
   'use strict';
 
   var KEY = 'pd.v1';
-  var VERSION = 9;
+  var VERSION = 10;
+  var SCHEMA = 2;        // veri yapısı sürümü — 2: ALTINS1 kaldırıldı, hedefler 60/20/20
   var SCAN_URL = 'https://scanner.tradingview.com/global/scan';
   var FX_SYM = 'FX_IDC:USDTRY';
-  var OZ_SYM = 'OANDA:XAUUSD';
   var REMIND_DAYS = 25;
   var DEV_LIMIT = 5;
   var MIN_BUY = 500;     // bunun altındaki alımlar önerilmez (TL)
   var AUTO_MS = 60 * 1000; // uygulama açıkken otomatik yenileme aralığı
 
   var DEFAULT_ASSETS = [
-    { id: 'voo', name: 'VOO', currency: 'USD', target: 50, symbol: 'AMEX:VOO', qty: 0 },
-    { id: 'qqq', name: 'QQQ', currency: 'USD', target: 15, symbol: 'NASDAQ:QQQ', qty: 0 },
-    { id: 'vxus', name: 'VXUS', currency: 'USD', target: 15, symbol: 'NASDAQ:VXUS', qty: 0 },
-    { id: 'altins1', name: 'ALTINS1', currency: 'TRY', target: 20, symbol: 'BIST:ALTIN', qty: 0, gold: true }
+    { id: 'voo', name: 'VOO', currency: 'USD', target: 60, symbol: 'AMEX:VOO', qty: 0 },
+    { id: 'qqq', name: 'QQQ', currency: 'USD', target: 20, symbol: 'NASDAQ:QQQ', qty: 0 },
+    { id: 'vxus', name: 'VXUS', currency: 'USD', target: 20, symbol: 'NASDAQ:VXUS', qty: 0 }
   ];
 
   function freshState() {
     return {
+      schema: SCHEMA,
       assets: JSON.parse(JSON.stringify(DEFAULT_ASSETS)),
       prices: {},        // { assetId: { value } }
       fx: null,          // { value }
-      gram: null,        // { value }
       updatedAt: null,   // son başarılı çekme
       amount: null,      // son girilen eklenecek tutar
       history: []        // aylık kayıtlar
@@ -70,11 +69,44 @@
     idb('readwrite', function (s) { return s.put(json, KEY); }).catch(function () {});
   }
 
+  var migrated = false;  // açılışta eski veri yeni yapıya taşındıysa kaydetmek için
+
   function normalize(s) {
     var base = freshState();
     if (!s || !Array.isArray(s.assets)) return base;
+    if (!s.schema) s.schema = 1;
     for (var k in base) if (!(k in s)) s[k] = base[k];
+    if (s.schema < 2) { migrateNoGold(s); migrated = true; }
     return s;
+  }
+
+  function isAltins(name) { return String(name || '').toUpperCase() === 'ALTINS1'; }
+
+  // Şema 1 → 2: ALTINS1 ve altınla ilgili her şey kalkar; fon adetleri korunur.
+  // Geçmiş kayıtlarından ALTINS1 satırları silinir, toplamları üç fona göre yeniden hesaplanır.
+  function migrateNoGold(s) {
+    s.assets = DEFAULT_ASSETS.map(function (d) {
+      var old = s.assets.filter(function (a) { return a.id === d.id; })[0];
+      var qty = old && typeof old.qty === 'number' && isFinite(old.qty) ? old.qty : 0;
+      return Object.assign({}, d, { qty: qty });
+    });
+    var keep = {};
+    DEFAULT_ASSETS.forEach(function (d) { keep[d.id] = true; });
+    Object.keys(s.prices || {}).forEach(function (id) { if (!keep[id]) delete s.prices[id]; });
+    delete s.gram;
+    (s.history || []).forEach(function (rec) {
+      rec.assets = (rec.assets || []).filter(function (a) { return !isAltins(a.name); });
+      if (rec.added) rec.added = rec.added.filter(function (x) { return !isAltins(x.name); });
+      delete rec.gram;
+      var usdTotal = 0;
+      var ok = rec.fx > 0 && rec.assets.every(function (a) {
+        if (a.currency !== 'USD' || !(a.price > 0) || !(a.qty >= 0)) return false;
+        usdTotal += a.qty * a.price;
+        return true;
+      });
+      if (ok) { rec.totalUSD = usdTotal; rec.totalTL = usdTotal * rec.fx; }
+    });
+    s.schema = 2;
   }
 
   // ---------- Biçim ----------
@@ -90,7 +122,7 @@
   function tl(n) { return fmt(n, 0) + ' TL'; }
   function tl2(n) { return fmt(n, 2) + ' TL'; }
   function usd(n) { return fmt(n, 2) + ' $'; }
-  function pct(n) { return '%' + fmt(n, 1); }
+  function pct(n) { return n == null || !isFinite(n) ? '—' : '%' + fmt(n, 1); }
   function units(n, cur) { return cur === 'USD' ? fmt(n, 0, 4) : fmt(n, 0); }
   function signed(n) { return (n > 0 ? '+' : n < 0 ? '−' : '') + fmt(Math.abs(n), 1); }
   function dateTime(ts) {
@@ -129,20 +161,11 @@
 
   function priceOf(a) { var p = state.prices[a.id]; return p ? p.value : null; }
   function fxVal() { return state.fx ? state.fx.value : null; }
-  function gramVal() { return state.gram ? state.gram.value : null; }
-  function goldAsset() { return state.assets.filter(function (a) { return a.gold; })[0] || null; }
 
   function calcInput() {
     return state.assets.map(function (a) {
       return { id: a.id, name: a.name, currency: a.currency, target: a.target, qty: a.qty, price: priceOf(a) };
     });
-  }
-
-  function premium() {
-    var g = goldAsset();
-    if (!g) return null;
-    var p = Calc.goldPremium(priceOf(g), gramVal());
-    return p == null ? null : { value: p, level: Calc.premiumLevel(p) };
   }
 
   function lastRecord() { return state.history.length ? state.history[state.history.length - 1] : null; }
@@ -159,7 +182,7 @@
     }
 
     var withSym = state.assets.filter(function (a) { return a.symbol; });
-    var tickers = withSym.map(function (a) { return a.symbol; }).concat([FX_SYM, OZ_SYM]);
+    var tickers = withSym.map(function (a) { return a.symbol; }).concat([FX_SYM]);
     var ctrl = window.AbortController ? new AbortController() : null;
     var timer = setTimeout(function () { if (ctrl) ctrl.abort(); }, 15000);
 
@@ -179,9 +202,6 @@
       var missing = [];
       var fx = map[FX_SYM] ? map[FX_SYM].price : null;
       if (fx) state.fx = { value: fx }; else missing.push('USD/TL kuru');
-      var oz = map[OZ_SYM] ? map[OZ_SYM].price : null;
-      if (oz && fx) state.gram = { value: Calc.gramGoldFromSpot(oz, fx) };
-      else missing.push('gram altın');
       withSym.forEach(function (a) {
         var m = map[a.symbol];
         var want = a.currency === 'USD' ? 'USD' : 'TRY';
@@ -267,7 +287,6 @@
       (state.updatedAt ? dateTime(state.updatedAt) : 'henüz yok') + '</div>';
     h += '<div class="prices num"><div class="tiny muted" style="margin-bottom:2px">Güncel fiyatlar</div>';
     h += '<div class="row small"><span class="muted">USD/TL</span><span>' + (fx ? fmt(fx, 4) : '—') + '</span></div>';
-    h += '<div class="row small"><span class="muted">Gram altın</span><span>' + (gramVal() ? tl2(gramVal()) : '—') + '</span></div>';
     state.assets.forEach(function (a) {
       var p = priceOf(a);
       h += '<div class="row small"><span class="muted">' + esc(a.name) + '</span><span>' +
@@ -279,7 +298,6 @@
     h += '</section>';
 
     // Varlık kartları
-    var prem = premium();
     if (editing) {
       h += '<div class="note warn"><b>Düzenleme açık.</b> Adetleri Midas\'taki gibi gir. Yazdıkların, ekranın altındaki ' +
         '<b>"Adetleri kaydet"</b>e basıp onaylayana kadar kaydedilmez; toplam ve oranlar kayıtlı adetlerle hesaplanır.</div>';
@@ -302,10 +320,6 @@
       }
       h += '<div class="row" style="margin-top:10px"><span class="small muted">Oran</span><span class="num">' +
         (r.ratio != null ? pct(r.ratio) : '—') + ' <span class="muted">· hedef %' + fmt(a.target, 0, 2) + '</span></span></div>';
-      if (a.gold) {
-        h += '<div class="row" style="margin-top:10px"><span class="small muted">Altın primi</span>' +
-          (prem ? '<span class="pill ' + prem.level + ' num">' + pct(prem.value) + '</span>' : '<span class="muted small">fiyatlar bekleniyor</span>') + '</div>';
-      }
       h += '</section>';
     });
 
@@ -336,9 +350,6 @@
       h += '<div class="note warn">Fiyatlar bu hesaptan sonra değişti. Aşağıdaki öneri hesapladığın andaki fiyatlarla. ' +
         'Henüz alım yapmadıysan istersen yeniden "Hesapla"ya bas.</div>';
     }
-    if (r.goldSkipped) {
-      h += '<div class="note bad">Altın primi ' + pct(r.goldSkipped) + '. Prim çok yüksek, bu ay altın alımını ertele. Altının payı diğer varlıklara dağıtıldı.</div>';
-    }
     if (r.usdNeeded > 0.005) {
       h += '<div class="step"><b>Önce ' + tl(r.usdNeededTL) + ' ile ' + usd(r.usdNeeded) + ' al.</b>' +
         '<div class="small muted num">Kur ' + fmt(fxVal(), 4) + '</div></div>';
@@ -352,7 +363,6 @@
       h += '<div class="row small"><span class="muted">Oran</span><span class="num">' +
         pct(x.ratio) + ' → ' + pct(x.afterRatio) + ' <span class="muted">· hedef %' + fmt(x.target, 0, 2) + '</span></span></div>';
       if (x.small) h += '<div class="small muted">' + tl(MIN_BUY) + '\'den küçük kaldığı için bu ay atlandı, payı diğerlerine kaydırıldı.</div>';
-      else if (!x.included) h += '<div class="small" style="color:var(--bad)">Prim çok yüksek, bu ay altın alımını ertele.</div>';
       h += '</div>';
     });
     if (r.leftoverTL >= 1) {
@@ -378,7 +388,7 @@
       h += '<div class="row"><b>' + date(rec.ts) + '</b><button class="ghost" data-action="delRec" data-ts="' + rec.ts + '">Sil</button></div>';
       h += '<div class="num">' + tl(rec.totalTL) + ' <span class="muted">· ' + usd(rec.totalUSD) + '</span></div>';
       h += '<div class="small muted num">Eklenen: ' + (rec.amount ? tl(rec.amount) : '—') + ' · Kur: ' + fmt(rec.fx, 4) +
-        (rec.gram ? ' · Gram altın: ' + tl2(rec.gram) : '') + '</div>';
+        '</div>';
       if (rec.added && rec.added.length) {
         h += '<div class="small num" style="margin-top:4px">Alınan: ' + rec.added.map(function (x) {
           return esc(x.name) + ' +' + units(x.units, x.currency);
@@ -456,18 +466,14 @@
   }
 
   function compute(amount) {
-    var prem = premium();
-    var g = goldAsset();
-    var skip = prem && prem.level === 'red' && g && state.assets.length > 1;
-    var res = Calc.rebalanceMin(calcInput(), fxVal(), amount, skip ? [g.id] : [], MIN_BUY);
-    if (!res.errors.length && skip) res.goldSkipped = prem.value;
+    var res = Calc.rebalanceMin(calcInput(), fxVal(), amount, [], MIN_BUY);
     res.priceKey = priceKey();
     return res;
   }
 
   // Hesapta kullanılan fiyatların özeti; değişip değişmediğini anlamak için
   function priceKey() {
-    return JSON.stringify([fxVal(), gramVal(), state.assets.map(priceOf)]);
+    return JSON.stringify([fxVal(), state.assets.map(priceOf)]);
   }
 
   function sameDay(a, b) {
@@ -513,7 +519,6 @@
       ts: ts,
       added: added || [],
       fx: fx,
-      gram: gramVal(),
       amount: state.amount || 0,
       totalTL: v.totalTL,
       totalUSD: v.totalUSD,
@@ -597,6 +602,7 @@
 
   var local = readLocal();
   state = normalize(local);
+  if (migrated) save();   // yeni yapıya taşınan veriyi hemen kalıcı yap
   render();
 
   // localStorage boşsa (ör. tarayıcı temizlediyse) IndexedDB kopyasından geri yükle
@@ -604,7 +610,7 @@
     idb('readonly', function (s) { return s.get(KEY); }).then(function (json) {
       if (!json) return;
       state = normalize(JSON.parse(json));
-      try { localStorage.setItem(KEY, json); } catch (e) {}
+      save();
       render();
       toast('Veriler yedekten geri yüklendi');
     }).catch(function () {});

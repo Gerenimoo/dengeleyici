@@ -6,33 +6,32 @@ const C = isNode ? require('./calc.js') : window.Calc;
 
 const near = (a, b, msg) => assert.ok(Math.abs(a - b) < 0.01, `${msg}: ${a} ≠ ${b}`);
 
-// Tarifteki örnek: kur 45, VOO 7.000 / QQQ 2.000 / VXUS 2.000 USD, ALTINS1 0, eklenecek 35.000 TL
+// Kur 45; VOO 7.000 / QQQ 2.000 / VXUS 0 USD; hedefler 60/20/20; eklenecek 35.000 TL
 const sample = [
-  { id: 'VOO', currency: 'USD', target: 50, qty: 10, price: 700 },
-  { id: 'QQQ', currency: 'USD', target: 15, qty: 4, price: 500 },
-  { id: 'VXUS', currency: 'USD', target: 15, qty: 20, price: 100 },
-  { id: 'ALTINS1', currency: 'TRY', target: 20, qty: 0, price: 70 }
+  { id: 'VOO', currency: 'USD', target: 60, qty: 10, price: 700 },
+  { id: 'QQQ', currency: 'USD', target: 20, qty: 4, price: 500 },
+  { id: 'VXUS', currency: 'USD', target: 20, qty: 0, price: 100 }
 ];
 
-test('örnek: 35.000 TL\'nin tamamı ALTINS1\'e', () => {
+test('örnek: 35.000 TL\'nin tamamı VXUS\'a', () => {
   const r = C.rebalance(sample, 45, 35000);
   assert.deepStrictEqual(r.errors, []);
-  near(r.currentTL, 495000, 'mevcut toplam');
-  near(r.newTotalTL, 530000, 'yeni toplam');
+  // TL değerler 315.000 / 90.000 / 0 → toplam 405.000; yeni toplam 440.000
+  near(r.currentTL, 405000, 'mevcut toplam');
+  near(r.newTotalTL, 440000, 'yeni toplam');
   const by = Object.fromEntries(r.rows.map(x => [x.id, x]));
   near(by.VOO.valueTL, 315000, 'VOO TL');
   near(by.QQQ.valueTL, 90000, 'QQQ TL');
-  near(by.VXUS.valueTL, 90000, 'VXUS TL');
-  near(by.VOO.targetTL, 265000, 'VOO hedef');
-  near(by.QQQ.targetTL, 79500, 'QQQ hedef');
-  near(by.VXUS.targetTL, 79500, 'VXUS hedef');
-  near(by.ALTINS1.targetTL, 106000, 'ALTINS1 hedef');
+  near(by.VOO.targetTL, 264000, 'VOO hedef');
+  near(by.QQQ.targetTL, 88000, 'QQQ hedef');
+  near(by.VXUS.targetTL, 88000, 'VXUS hedef');
   near(by.VOO.deficit, 0, 'VOO eksik');
-  near(by.ALTINS1.deficit, 106000, 'ALTINS1 eksik');
-  near(by.ALTINS1.buyTL, 35000, 'ALTINS1 alım');
-  near(by.VOO.buyTL + by.QQQ.buyTL + by.VXUS.buyTL, 0, 'USD alımları');
-  assert.strictEqual(by.ALTINS1.units, 500); // 35000 / 70
-  near(r.usdNeeded, 0, 'gereken USD');
+  near(by.QQQ.deficit, 0, 'QQQ eksik');
+  near(by.VXUS.deficit, 88000, 'VXUS eksik');
+  near(by.VXUS.buyTL, 35000, 'VXUS alım');
+  near(by.VOO.buyTL + by.QQQ.buyTL, 0, 'diğer alımlar');
+  near(r.usdNeeded, 35000 / 45, 'gereken USD');
+  assert.strictEqual(by.VXUS.units, C.floorTo(35000 / 45 / 100, 4));
 });
 
 test('eksik yoksa hedef oranlara göre dağıtır', () => {
@@ -57,13 +56,12 @@ test('toplam eksik 0 ise hedef oranlarına göre dağıtır', () => {
   near(r.rows[1].buyTL, 0, 'B hariç');
 });
 
-test('prim yüksekken altın hariç: payı diğerlerine gider, satış yok', () => {
-  const r = C.rebalance(sample, 45, 35000, ['ALTINS1']);
+test('hariç tutulan varlığın payı diğerlerine gider, satış yok', () => {
+  const r = C.rebalance(sample, 45, 35000, ['VXUS']);
   const sum = r.rows.reduce((s, x) => s + x.buyTL, 0);
   near(sum, 35000, 'toplam dağıtılan');
   assert.ok(r.rows.every(x => x.buyTL >= 0));
-  near(r.rows.find(x => x.id === 'ALTINS1').buyTL, 0, 'altın 0');
-  near(r.usdNeededTL, 35000, 'hepsi dolara');
+  near(r.rows.find(x => x.id === 'VXUS').buyTL, 0, 'VXUS 0');
 });
 
 test('USD alımda kesirli adet, artan para ve gereken dolar', () => {
@@ -78,21 +76,20 @@ test('USD alımda kesirli adet, artan para ve gereken dolar', () => {
 });
 
 test('500 TL altındaki alımlar önerilmez, tutar diğerlerine kayar', () => {
-  // Kur 49,107; tutar 20.000 → normalde VXUS'a ~64 TL düşüyor
+  // Kur 1; eksikler 570 / 240 / 1.190 → QQQ'ya 240 TL düşer
   const a = [
-    { id: 'VOO', currency: 'USD', target: 50, qty: 10, price: 707.54 },
-    { id: 'QQQ', currency: 'USD', target: 15, qty: 3, price: 749.58 },
-    { id: 'VXUS', currency: 'USD', target: 15, qty: 20, price: 85.43 },
-    { id: 'ALTINS1', currency: 'TRY', target: 20, qty: 0, price: 71.45 }
+    { id: 'VOO', currency: 'USD', target: 60, qty: 6000, price: 1 },
+    { id: 'QQQ', currency: 'USD', target: 20, qty: 1950, price: 1 },
+    { id: 'VXUS', currency: 'USD', target: 20, qty: 1000, price: 1 }
   ];
-  const plain = C.rebalance(a, 49.107, 20000);
-  const vx = plain.rows.find(x => x.id === 'VXUS').buyTL;
-  assert.ok(vx > 0 && vx < 500, 'ön koşul: VXUS küçük');
-  const r = C.rebalanceMin(a, 49.107, 20000, [], 500);
+  const plain = C.rebalance(a, 1, 2000);
+  near(plain.rows.find(x => x.id === 'QQQ').buyTL, 240, 'ön koşul: QQQ küçük');
+  const r = C.rebalanceMin(a, 1, 2000, [], 500);
   const by = Object.fromEntries(r.rows.map(x => [x.id, x]));
-  near(by.VXUS.buyTL, 0, 'VXUS atlandı');
-  assert.strictEqual(by.VXUS.small, true);
-  near(r.rows.reduce((s, x) => s + x.buyTL, 0), 20000, 'tutarın tamamı dağıtıldı');
+  near(by.QQQ.buyTL, 0, 'QQQ atlandı');
+  assert.strictEqual(by.QQQ.small, true);
+  near(by.VOO.buyTL, 2000 * 570 / 1760, 'VOO');
+  near(by.VXUS.buyTL, 2000 * 1190 / 1760, 'VXUS');
   assert.ok(r.rows.every(x => x.buyTL === 0 || x.buyTL >= 500));
 });
 
@@ -108,14 +105,4 @@ test('geçersiz girişte anlaşılır hata', () => {
   assert.ok(r.errors.some(e => e.includes('kuru eksik')));
   const bad = sample.map(x => ({ ...x, target: 10 }));
   assert.ok(C.rebalance(bad, 45, 100).errors.some(e => e.includes('%100')));
-});
-
-test('altın primi ve renk eşikleri', () => {
-  const gram = C.gramGoldFromSpot(4140.52, 49.107);
-  near(gram, 6537.16, 'gram altın');
-  const p = C.goldPremium(71.45, gram);
-  near(p, 9.298, 'prim');
-  assert.strictEqual(C.premiumLevel(p), 'green');
-  assert.strictEqual(C.premiumLevel(15), 'yellow');
-  assert.strictEqual(C.premiumLevel(25), 'red');
 });

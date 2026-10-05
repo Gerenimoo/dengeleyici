@@ -2,8 +2,6 @@
 (function (root) {
   'use strict';
 
-  var GRAM_PER_OUNCE = 31.1035;
-
   // Aşağı yuvarla; kayan nokta hatasını tolere et (0.29999999 → 0.3)
   function floorTo(x, decimals) {
     var f = Math.pow(10, decimals);
@@ -12,23 +10,6 @@
 
   function isPos(x) { return typeof x === 'number' && isFinite(x) && x > 0; }
   function isNonNeg(x) { return typeof x === 'number' && isFinite(x) && x >= 0; }
-
-  function gramGoldFromSpot(ounceUsd, fx) {
-    return ounceUsd * fx / GRAM_PER_OUNCE;
-  }
-
-  // ALTINS1 = 0,01 gram altın
-  function goldPremium(certPrice, gramPrice) {
-    if (!isPos(certPrice) || !isPos(gramPrice)) return null;
-    return (certPrice * 100 / gramPrice - 1) * 100;
-  }
-
-  function premiumLevel(p) {
-    if (p == null) return null;
-    if (p < 10) return 'green';
-    if (p <= 20) return 'yellow';
-    return 'red';
-  }
 
   // Varlıkların TL değeri, mevcut oran, sapma
   // assets: [{id, currency:'USD'|'TRY', target (yüzde), qty, price}]
@@ -79,7 +60,7 @@
     return errs;
   }
 
-  // Ana hesap. exclude: bu ay alım yapılmayacak varlık id'leri (ör. prim yüksekken altın)
+  // Ana hesap. exclude: bu ay alım yapılmayacak varlık id'leri (ör. çok küçük kalan alımlar)
   function rebalance(assets, fx, amount, exclude) {
     exclude = exclude || [];
     var errors = validate(assets, fx, amount);
@@ -166,11 +147,7 @@
   }
 
   var api = {
-    GRAM_PER_OUNCE: GRAM_PER_OUNCE,
     floorTo: floorTo,
-    gramGoldFromSpot: gramGoldFromSpot,
-    goldPremium: goldPremium,
-    premiumLevel: premiumLevel,
     valuate: valuate,
     validate: validate,
     rebalance: rebalance,

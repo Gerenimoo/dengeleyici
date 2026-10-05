@@ -27,10 +27,6 @@
     --warn-bg: #fdf3e6;
     --bad: #c0392b;
     --bad-bg: #fbeceb;
-    --good: #2e7d4f;
-    --good-bg: #e8f4ec;
-    --yellow: #a07a00;
-    --yellow-bg: #fbf5df;
     color-scheme: light;
   }
   @media (prefers-color-scheme: dark) {
@@ -47,10 +43,6 @@
       --warn-bg: #2e2416;
       --bad: #ef7a6c;
       --bad-bg: #2f1c1a;
-      --good: #6fcf97;
-      --good-bg: #17291f;
-      --yellow: #e6c34d;
-      --yellow-bg: #2b2716;
       color-scheme: dark;
     }
   }
@@ -74,10 +66,6 @@
   .num { font-variant-numeric: tabular-nums; }
   .big { font-size: 30px; font-weight: 650; letter-spacing: -0.5px; }
   .row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-  .pill { display: inline-block; padding: 2px 9px; border-radius: 99px; font-weight: 600; font-size: 14px; }
-  .pill.green { background: var(--good-bg); color: var(--good); }
-  .pill.yellow { background: var(--yellow-bg); color: var(--yellow); }
-  .pill.red { background: var(--bad-bg); color: var(--bad); }
   .prices { margin-top: 8px; padding-top: 6px; border-top: 1px solid var(--line); }
   .prices .row { padding: 3px 0; }
   .asset.warn { border-color: var(--warn); box-shadow: inset 4px 0 0 var(--warn); }
